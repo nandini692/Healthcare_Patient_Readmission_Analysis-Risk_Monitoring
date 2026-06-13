@@ -1,66 +1,59 @@
-# Dataset Description
+# Dataset Description (aligned to readmission_db.sql)
 
-This dataset is designed to support a patient readmission analytics and risk monitoring dashboard. The goal is to capture the data needed to understand why patients return within 30 days and provide actionable insights using Excel, SQL, and Power BI.
+This file documents the actual schema and coverage loaded by Dataset/readmission_db.sql. The SQL dump implements a reporting-style model (dimensions + facts) designed for 30-day readmission analysis and is ready for use with MySQL, Power BI, and Excel.
 
-## Recommended Dataset Structure
+## Key tables and coverage
 
-- `PatientID`
-- `AdmissionID`
-- `AdmissionDate`
-- `DischargeDate`
-- `ReadmissionDate` (if within 30 days)
-- `ReadmissionFlag` (yes/no within 30 days)
-- `ReadmissionType` (planned / unplanned)
-- `PrimaryDiagnosisCode`
-- `SecondaryDiagnosisCodes`
-- `ComorbidityCount`
-- `LengthOfStay`
-- `DischargeDisposition`
-- `InsuranceType`
-- `AgeGroup`
-- `Gender`
-- `ServiceLine` / `Department`
-- `SeverityLevel`
-- `FollowUpAppointmentScheduled` (yes/no)
-- `FollowUpDays` (days to first post-discharge follow-up)
-- `MedicationReconciliationDone` (yes/no)
-- `SocialSupportFlag` (if available)
-- `ZipCode` / `Region`
-- `AdmissionSource` (ED, transfer, clinic)
-- `ReadmissionReasonCategory`
+- `dim_date`: daily date dimension covering 2019-01-01 through 2022-12-31 (keys in `YYYYMMDD` int format).
+- `dim_department`: 10 service lines / departments (Cardiology, Pulmonology, ..., Endocrinology).
+- `dim_diagnosis`: ~40 ICD-10 diagnosis codes with description and diagnosis_group.
+- `dim_insurance`: 9 payer entries (Medicare, Medicaid variants, major private insurers, Self-pay).
+- `dim_patient`: synthetic patient master (approximately 7,000 patients; unique `medical_record_number`).
+- `fact_admission`: admissions fact (primary row per inpatient encounter). The dump contains admissions through at least `admission_id` ~11066 (~11k admissions).
+- `bridge_admission_diagnosis`: many-to-many bridge linking admissions to multiple diagnoses.
+- `fact_readmission`: readmission links between an index admission and a later admission with `days_to_readmit`, `readmission_within_30` flag and a categorical `readmission_reason_category`.
 
-## Why This Dataset Works
+## Important columns (mapping to the earlier recommended fields)
 
-- It aligns directly with the problem statement: identifying factors associated with 30-day readmissions.
-- It supports analysis by demographics, diagnosis, department, and care transition processes.
-- It enables KPI calculations in Power BI without requiring predictive modeling.
-- It facilitates process insights, such as the relationship between follow-up scheduling and readmission outcomes.
+- PatientID: `dim_patient.patient_id` (also `medical_record_number` available as `medical_record_number`).
+- AdmissionID: `fact_admission.admission_id`.
+- AdmissionDate / DischargeDate: linked via `fact_admission.admission_date_key` and `fact_admission.discharge_date_key` -> `dim_date.date`.
+- ReadmissionFlag: `fact_readmission.readmission_within_30` (TINYINT 0/1).
+- ReadmissionType: `fact_readmission.readmission_type` (Planned / Unplanned).
+- ReadmissionReasonCategory: `fact_readmission.readmission_reason_category` (enumerated list in SQL).
+- PrimaryDiagnosisCode: `fact_admission.primary_diagnosis_code` (FK -> `dim_diagnosis.diagnosis_code`).
+- SecondaryDiagnosisCodes / multiple diagnoses: `bridge_admission_diagnosis` (`admission_id`, `diagnosis_code`, `is_primary`).
+- ComorbidityCount: `fact_admission.comorbidity_count`.
+- LengthOfStay: `fact_admission.length_of_stay` (days).
+- DischargeDisposition: `fact_admission.discharge_disposition` (Home, Skilled Nursing, Death, Other).
+- InsuranceType: `fact_admission.insurance_id` -> `dim_insurance.insurance_name` / `payer_type`.
+- AgeGroup / Gender: `dim_patient.age_group`, `dim_patient.gender`.
+- ServiceLine / Department: `fact_admission.service_line_id` -> `dim_department.department_id` / `department_name`.
+- SeverityLevel: `fact_admission.severity_level` (Low / Medium / High).
+- FollowUpScheduled / FollowUpDays: `fact_admission.follow_up_scheduled`, `fact_admission.follow_up_days`.
+- MedicationReconciliationDone: `fact_admission.medication_reconciliation_done`.
+- SocialSupportFlag: `dim_patient.social_support_flag`.
+- ZipCode / Region: `dim_patient.zip_code`, `dim_patient.region`.
+- AdmissionSource: `fact_admission.admission_source` (ED, Transfer, Clinic, Outpatient).
 
-## Best Data Sources
+## Enumerations and categories (examples from the SQL dump)
 
-- Hospital Admission, Discharge, and Transfer (ADT) system
-- Electronic Health Record (EHR) admission and discharge logs
-- Clinical documentation for diagnosis and severity details
-- Scheduling systems for follow-up appointments
-- Billing or claims data for insurance type and planned/unplanned status
-- Quality or case management records for care-transition metrics
+- `admission_source`: 'ED','Transfer','Clinic','Outpatient'.
+- `discharge_disposition`: 'Home','Skilled Nursing','Death','Other'.
+- `severity_level`: 'Low','Medium','High'.
+- `payer_type` (in `dim_insurance`): 'Medicare','Medicaid','Private','Self-pay'.
+- `readmission_reason_category`: includes values such as 'Heart Failure Exacerbation','Respiratory Distress','Infection / Sepsis','Renal Failure','GI Complication','Medication Non-compliance','Surgical Complication','Metabolic Imbalance','Neurological Event','Other'.
 
-## Reference Ideas
+## Notes on suitability for Excel / Power BI / SQL
 
-Use concepts from established readmission analytics sources such as:
+- The model is intentionally star-like and analytic-ready: facts use integer PK/FK columns and dimensions store human-readable labels — ideal for joins in Power BI or Excel via ODBC/CSV extracts.
+- Date grain is daily and mapped to `dim_date`, enabling time-series slicing in Power BI using the date key.
+- Indexes and foreign keys are present in the dump (useful for testing SQL performance and ensuring referential integrity when imported into MySQL).
 
-- CMS Hospital Readmission Reduction Program (HRRP) metrics
-- AHRQ readmission quality measures
-- LACE score component definitions for risk-factor reference
-- Hospital dashboards built from admission/discharge tables, patient demographics, and transition process metrics
+## Suggested next steps when using this dump
 
-## Dataset Use Case
+- Load `Dataset/readmission_db.sql` into a local MySQL instance (InnoDB, utf8mb4) and confirm row counts for `fact_admission` and `fact_readmission`.
+- Build a simple star-schema view in SQL that flattens `fact_admission` + patient + primary diagnosis + insurance + date for easy Power BI import.
+- Create a readmission-level view joining `fact_readmission` -> `fact_admission` (index and readmit admissions) to analyze days-to-readmit and reason categories.
 
-This dataset should be used as a raw collection or staging reference. It is intended for:
-
-- data collection planning
-- dataset design and preparation
-- SQL-based aggregation and transformation
-- Power BI dashboarding and reporting
-
-This approach ensures the project remains a focused data analytics effort, not a machine learning or AI implementation.
+If you want, I can update the repository README with a short import and verification SQL script and create the two recommended views for Power BI import.
